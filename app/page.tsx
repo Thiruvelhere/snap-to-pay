@@ -36,6 +36,11 @@ type UnknownItem = {
   estimatedQuantity: number;
 };
 
+type UnknownProductDraft = {
+  name: string;
+  price: string;
+};
+
 type AnalyzeResult = {
   success: boolean;
   message?: string;
@@ -70,6 +75,9 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
   const [unknownItems, setUnknownItems] = useState<UnknownItem[]>([]);
+  const [unknownProductDrafts, setUnknownProductDrafts] = useState<UnknownProductDraft[]>([]);
+  const [savingUnknownIndex, setSavingUnknownIndex] = useState<number | null>(null);
+  const [unknownProductError, setUnknownProductError] = useState("");
   const [aiAnalysisComplete, setAiAnalysisComplete] = useState(false);
 
   // Seller-created products
@@ -258,6 +266,7 @@ export default function Home() {
     setAnalysisError("");
     setAiAnalysisComplete(false);
     setUnknownItems([]);
+    setUnknownProductDrafts([]);
     setSelectedImage(file);
   }
 
@@ -348,6 +357,65 @@ export default function Home() {
     }
   }
 
+  async function handleAddUnknownProduct(index: number) {
+    if (savingUnknownIndex !== null) return;
+
+    const item = unknownItems[index];
+    const draft = unknownProductDrafts[index];
+    if (!item || !draft) return;
+
+    try {
+      setSavingUnknownIndex(index);
+      setUnknownProductError("");
+
+      const name = draft.name.trim();
+      const priceInRupees = Number(draft.price);
+
+      if (!name) {
+        throw new Error("Please enter a product name.");
+      }
+      if (!draft.price.trim() || !Number.isFinite(priceInRupees) || priceInRupees <= 0) {
+        throw new Error("Enter a valid seller-confirmed price.");
+      }
+
+      const priceInPaise = Math.round(priceInRupees * 100);
+      if (!Number.isSafeInteger(priceInPaise) || priceInPaise <= 0) {
+        throw new Error("The product price is outside the supported range.");
+      }
+
+      const response = await fetch("/api/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          description: item.description,
+          price: priceInPaise,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success || !data.item) {
+        throw new Error(data.message || "Unable to add product to catalogue.");
+      }
+
+      const newProduct: CatalogItem = data.item;
+      const quantityToAdd = Math.max(1, Math.min(100, item.estimatedQuantity || 1));
+
+      setProducts((previous) => [...previous, newProduct]);
+      setQuantities((previous) => ({ ...previous, [newProduct.id]: quantityToAdd }));
+      setUnknownItems((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
+      setUnknownProductDrafts((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
+
+      setCreatedSale(null);
+      setPaypalOrder(null);
+      setPaypalError("");
+    } catch (err) {
+      setUnknownProductError(err instanceof Error ? err.message : "Unable to add product.");
+    } finally {
+      setSavingUnknownIndex(null);
+    }
+  }
+
   async function handleAnalyzeImage() {
     if (!selectedImage || analyzing) return;
 
@@ -396,7 +464,16 @@ export default function Home() {
       // Seller can edit this cart before checkout.
       setQuantities(detectedQuantities);
       setConfidenceScores(detectedConfidence);
-      setUnknownItems(data.unknownItems || []);
+
+      const detectedUnknownItems = data.unknownItems || [];
+      setUnknownItems(detectedUnknownItems);
+      setUnknownProductDrafts(
+        detectedUnknownItems.map((item) => ({
+          name: item.description,
+          price: "",
+        }))
+      );
+
       setAiAnalysisComplete(true);
     } catch (err) {
       setAnalysisError(
@@ -660,6 +737,7 @@ export default function Home() {
                       setAnalysisError("");
                       setAiAnalysisComplete(false);
                       setUnknownItems([]);
+                      setUnknownProductDrafts([]);
                     }}
                     className="shrink-0 text-sm font-medium text-red-600 hover:text-red-700"
                   >
@@ -818,36 +896,96 @@ export default function Home() {
               {unknownItems.length > 0 && (
                 <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
                   <h4 className="font-semibold text-amber-900">
-                    Unrecognized products
+                    New products detected
                   </h4>
 
                   <p className="mt-1 text-sm text-amber-800">
-                    These items could not be matched to your catalogue.
-                    You can create a catalogue entry for an unrecognized product using Quick Add.
+                    These products were not found in your catalogue. Review the
+                    AI-suggested names and enter a seller-confirmed price.
                   </p>
 
-                  <ul className="mt-3 space-y-2">
+                  {unknownProductError && (
+                    <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {unknownProductError}
+                    </p>
+                  )}
+
+                  <div className="mt-4 space-y-4">
                     {unknownItems.map((item, index) => (
-                      <li
+                      <div
                         key={index}
-                        className="text-sm text-amber-900"
+                        className="rounded-xl border border-amber-200 bg-white p-4"
                       >
-                        {item.description} — estimated quantity:{" "}
-                        {item.estimatedQuantity}
-                      </li>
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <span className="text-sm font-semibold text-zinc-800">
+                            New product {index + 1}
+                          </span>
+                          <span className="text-xs text-zinc-500">
+                            Quantity detected: {item.estimatedQuantity}
+                          </span>
+                        </div>
+
+                        <label className="block text-sm font-medium text-zinc-700">
+                          AI-suggested product name
+                          <input
+                            type="text"
+                            value={unknownProductDrafts[index]?.name || ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setUnknownProductDrafts((previous) =>
+                                previous.map((draft, draftIndex) =>
+                                  draftIndex === index
+                                    ? { ...draft, name: value }
+                                    : draft
+                                )
+                              );
+                            }}
+                            maxLength={255}
+                            placeholder="Enter product name"
+                            className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2"
+                          />
+                        </label>
+
+                        <label className="mt-3 block text-sm font-medium text-zinc-700">
+                          Seller-confirmed price (INR)
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={unknownProductDrafts[index]?.price || ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setUnknownProductDrafts((previous) =>
+                                previous.map((draft, draftIndex) =>
+                                  draftIndex === index
+                                    ? { ...draft, price: value }
+                                    : draft
+                                )
+                              );
+                            }}
+                            placeholder="Enter price"
+                            className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2"
+                          />
+                        </label>
+
+                        <p className="mt-2 text-xs text-zinc-500">
+                          AI suggestions require seller verification. No price
+                          is automatically assigned.
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={() => handleAddUnknownProduct(index)}
+                          disabled={savingUnknownIndex !== null}
+                          className="mt-4 w-full rounded-lg bg-zinc-900 px-4 py-2.5 font-semibold text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {savingUnknownIndex === index
+                            ? "Adding product..."
+                            : "Confirm & Add to Catalogue and Cart"}
+                        </button>
+                      </div>
                     ))}
-                  </ul>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuickAddOpen(true);
-                      setQuickAddError("");
-                      setQuickAddName(unknownItems[0]?.description || "");
-                    }}
-                    className="mt-4 rounded-lg bg-amber-900 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800"
-                  >
-                    Quick Add Product
-                  </button>
+                  </div>
                 </div>
               )}
 

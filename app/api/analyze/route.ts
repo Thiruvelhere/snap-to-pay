@@ -7,79 +7,85 @@ import { db, catalogItems } from "../../../src/lib/db";
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
-const allowedMimeTypes = [
+const ALLOWED_MIME_TYPES = [
     "image/jpeg",
     "image/png",
     "image/webp",
 ];
 
+
 const analysisSchema = z.object({
     matchedItems: z.array(
         z.object({
             catalogItemId: z.string().uuid(),
-            quantity: z.number().int().positive(),
-            confidence: z.number().min(0).max(1),
+            quantity: z.number().int().positive().catch(1).default(1),
+            confidence: z.number().min(0).max(1).catch(0.5).default(0.5),
         })
-    ),
+    ).default([]),
+
     unknownItems: z.array(
         z.object({
             description: z.string(),
-            estimatedQuantity: z.number().int().positive(),
+            estimatedQuantity: z.number().int().positive().catch(1).default(1),
         })
-    ),
+    ).default([]),
+
+    identifiedProducts: z.array(
+        z.object({
+            description: z.string().default("Unidentified product"),
+            category: z.string().default("Unknown"),
+            brand: z.string().nullable().default(null),
+            model: z.string().nullable().default(null),
+            color: z.string().nullable().default(null),
+            packaging: z.string().nullable().default(null),
+            visibleCondition: z.string().nullable().default(null),
+            barcode: z.string().nullable().default(null),
+        })
+    ).default([]),
 });
 
 const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY!,
     httpOptions: {
         apiVersion: "v1beta",
-        timeout: 60000,
+        timeout: 60_000,
     },
 });
 
 export async function POST(request: Request) {
-    const startedAt = Date.now();
-
-    const logTime = (stage: string) => {
-        console.info(`[analyze] ${stage}: ${Date.now() - startedAt}ms`);
-    };
-
     try {
         if (!process.env.GEMINI_API_KEY) {
             return NextResponse.json(
-                { success: false, message: "Gemini API key is missing" },
+                { success: false, error: "Gemini API key is not configured." },
                 { status: 500 }
             );
         }
 
-        // 1. Validate uploaded image.
         const formData = await request.formData();
         const image = formData.get("image");
+        const barcodeValue = formData.get("barcode");
 
         if (!(image instanceof File)) {
             return NextResponse.json(
-                { success: false, message: "Please upload an image" },
+                { success: false, error: "An image is required." },
                 { status: 400 }
             );
         }
 
-        if (!allowedMimeTypes.includes(image.type)) {
+        if (!ALLOWED_MIME_TYPES.includes(image.type)) {
             return NextResponse.json(
-                { success: false, message: "Unsupported image format" },
+                { success: false, error: "Unsupported image format." },
                 { status: 400 }
             );
         }
 
-        if (image.size === 0 || image.size > MAX_IMAGE_SIZE) {
+        if (image.size > MAX_IMAGE_SIZE) {
             return NextResponse.json(
-                { success: false, message: "Image must be between 1 byte and 5 MB" },
+                { success: false, error: "Image must be 5 MB or smaller." },
                 { status: 400 }
             );
         }
 
-        logTime("Image received");
-
-        // 2. Fetch catalogue.
         const catalogue = await db
             .select({
                 id: catalogItems.id,
@@ -89,73 +95,77 @@ export async function POST(request: Request) {
             .from(catalogItems)
             .orderBy(asc(catalogItems.name));
 
-        logTime("Catalogue fetched");
-
         if (catalogue.length === 0) {
             return NextResponse.json(
-                { success: false, message: "Product catalogue is empty" },
+                { success: false, error: "The product catalogue is empty." },
                 { status: 400 }
             );
         }
 
-        // 3. Convert image to Base64.
         const imageBuffer = Buffer.from(await image.arrayBuffer());
         const base64Image = imageBuffer.toString("base64");
 
         const catalogueText = catalogue
             .map(
                 (item) =>
-                    `ID: ${item.id}\nName: ${item.name}\nDescription: ${item.description ?? "No description"}`
+                    `ID: ${item.id} | Name: ${item.name} | Description: ${item.description || "No description"
+                    }`
             )
-            .join("\n\n");
+            .join("\n");
 
         const prompt = `
-You are a visual product identification system for a bakery.
+You are a visual product recognition and catalogue matching system.
 
-Identify products and quantities visible in the supplied photograph.
+Analyze the supplied product image. This system must work across general
+retail categories, not only food or bakery products.
 
-SELLER CATALOGUE:
+CATALOGUE:
 ${catalogueText}
 
-RULES:
-1. Match ONLY products from this catalogue.
-2. Never invent or modify catalogue IDs.
-3. Put uncertain or unmatched products in unknownItems.
-4. Count distinguishable visible products.
-5. Never invent products that are not visible.
-6. Never return prices.
-7. Confidence must be between 0 and 1.
-8. Be conservative when products are blurry or occluded.
+BARCODE SIGNAL:
+${typeof barcodeValue === "string" && barcodeValue.trim()
+                ? barcodeValue.trim()
+                : "No barcode was provided."}
 
-Return JSON with exactly this structure:
-{
-  "matchedItems": [
-    {
-      "catalogItemId": "catalogue UUID",
-      "quantity": 2,
-      "confidence": 0.92
-    }
-  ],
-  "unknownItems": [
-    {
-      "description": "Unidentified product",
-      "estimatedQuantity": 1
-    }
-  ]
-}
+TASKS:
 
-Return empty arrays if no products are identifiable.
+1. Identify each distinct visible product.
+2. Describe its visible characteristics.
+3. Extract the following attributes where visually supported:
+   - category
+   - brand
+   - model
+   - colour
+   - packaging
+   - visible condition
+4. Include the supplied barcode value in the relevant product's barcode
+   field, if one was provided. Do not invent barcode values.
+5. Match detected products against the supplied catalogue.
+6. Only use catalogue IDs that actually appear in the catalogue.
+7. If a product cannot be confidently matched, put it in unknownItems.
+8. Estimate the quantity of each detected product.
+9. Return a confidence score between 0 and 1 for every catalogue match.
+
+IMPORTANT RULES:
+
+- Do not invent brands, model numbers, or product specifications.
+- Use null for attributes that cannot be reliably determined.
+- Do not infer authenticity from an image or barcode.
+- Do not estimate product prices.
+- Do not create catalogue entries.
+- Do not force a match when the catalogue does not contain the product.
+- A barcode is an identification signal, not proof of authenticity.
+- Return valid JSON matching the requested schema.
 `;
 
-        // 4. Analyze using Gemini GenerateContent API (with fallback if primary model is under high demand).
-        logTime("Starting Gemini request");
+        const model =
+            process.env.GEMINI_MODEL || "gemini-3.5-flash";
 
-        const primaryModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
-        const fallbackModel = "gemini-3.6-flash";
+        let response;
 
-        const callGemini = async (modelName: string) => {
-            const res = await ai.models.generateContent({
-                model: modelName,
+        try {
+            response = await ai.models.generateContent({
+                model,
                 contents: [
                     {
                         role: "user",
@@ -173,99 +183,110 @@ Return empty arrays if no products are identifiable.
                 config: {
                     responseMimeType: "application/json",
                     temperature: 0.1,
-                    maxOutputTokens: 2048,
+                    maxOutputTokens: 4096,
                 },
             });
-            return res.text;
-        };
+        } catch (error: unknown) {
+            const message =
+                error instanceof Error ? error.message : "";
 
-        let responseText: string | undefined;
-
-        try {
-            responseText = await callGemini(primaryModel);
-        } catch (err: any) {
-            const isUnavailable =
-                err?.status === 503 ||
-                err?.code === 503 ||
-                String(err?.message || "").includes("503") ||
-                String(err?.message || "").includes("high demand");
-
-            if (isUnavailable && primaryModel !== fallbackModel) {
-                console.warn(
-                    `[analyze] ${primaryModel} is experiencing high demand (503). Retrying with fallback model ${fallbackModel}...`
-                );
-                responseText = await callGemini(fallbackModel);
+            if (
+                message.includes("503") ||
+                message.toLowerCase().includes("high demand")
+            ) {
+                response = await ai.models.generateContent({
+                    model: "gemini-3.6-flash",
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [
+                                { text: prompt },
+                                {
+                                    inlineData: {
+                                        mimeType: image.type,
+                                        data: base64Image,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                    config: {
+                        responseMimeType: "application/json",
+                        temperature: 0.1,
+                        maxOutputTokens: 4096,
+                    },
+                });
             } else {
-                throw err;
+                throw error;
             }
         }
 
-        logTime("Gemini response received");
+        const responseText = response.text;
 
         if (!responseText) {
-            throw new Error("Gemini returned an empty response");
+            return NextResponse.json(
+                { success: false, error: "AI returned an empty response." },
+                { status: 502 }
+            );
         }
 
-        // 5. Validate AI response.
         let parsedResponse: unknown;
 
         try {
             parsedResponse = JSON.parse(responseText);
         } catch {
-            console.error("Gemini returned invalid JSON:", responseText);
-
             return NextResponse.json(
-                { success: false, message: "AI returned invalid JSON" },
+                { success: false, error: "AI returned invalid JSON." },
                 { status: 502 }
             );
         }
 
-        const validated = analysisSchema.safeParse(parsedResponse);
+        const validation = analysisSchema.safeParse(parsedResponse);
 
-        if (!validated.success) {
+        if (!validation.success) {
             console.error(
-                "Invalid Gemini response:",
-                validated.error.flatten()
+                "AI response validation failed:",
+                validation.error.flatten()
             );
 
             return NextResponse.json(
-                { success: false, message: "AI returned invalid analysis data" },
+                {
+                    success: false,
+                    error: "AI response did not match the expected structure.",
+                },
                 { status: 502 }
             );
         }
 
-        // 6. Verify catalogue IDs against PostgreSQL.
+        const result = validation.data;
         const catalogueMap = new Map(
             catalogue.map((item) => [item.id, item])
         );
 
-        const matchedItems = validated.data.matchedItems.flatMap((match) => {
-            const product = catalogueMap.get(match.catalogItemId);
-
-            if (!product) return [];
-
-            return [{
-                catalogItemId: product.id,
-                productName: product.name,
-                quantity: match.quantity,
-                confidence: match.confidence,
-            }];
-        });
-
-        logTime("Analysis completed");
+        const matchedItems = result.matchedItems
+            .filter((item) => catalogueMap.has(item.catalogItemId))
+            .map((item) => ({
+                catalogItemId: item.catalogItemId,
+                productName: catalogueMap.get(item.catalogItemId)!.name,
+                quantity: item.quantity,
+                confidence: item.confidence,
+            }));
 
         return NextResponse.json({
             success: true,
             message: "Image analyzed successfully",
             matchedItems,
-            unknownItems: validated.data.unknownItems,
+            unknownItems: result.unknownItems,
+            identifiedProducts: result.identifiedProducts,
         });
-
     } catch (error) {
-        console.error("Image analysis error:", error);
+        console.error("Product analysis error:", error);
 
         return NextResponse.json(
-            { success: false, message: "Unable to analyze the image" },
+            {
+                success: false,
+                error: "Failed to analyze the product image.",
+            },
             { status: 500 }
         );
     }
