@@ -1,8 +1,10 @@
-
 import { NextResponse } from "next/server";
+import { connection } from "next/server";
 import { getPayPalAccessToken } from "../../../../src/lib/paypal";
 
 export async function GET() {
+    await connection();
+
     try {
         const accessToken = await getPayPalAccessToken();
 
