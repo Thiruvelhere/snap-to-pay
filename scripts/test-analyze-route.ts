@@ -26,7 +26,7 @@ export async function runTest(imageFilePath?: string) {
     mimeType = "image/png";
   }
 
-  const file = new File([buffer], filename, { type: mimeType });
+  const file = new File([new Uint8Array(buffer)], filename, { type: mimeType });
 
   const formData = new FormData();
   formData.append("image", file);
