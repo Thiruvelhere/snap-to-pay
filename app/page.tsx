@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 type CatalogItem = {
@@ -72,6 +72,22 @@ export default function Home() {
   const [unknownItems, setUnknownItems] = useState<UnknownItem[]>([]);
   const [aiAnalysisComplete, setAiAnalysisComplete] = useState(false);
 
+  // Seller-created products
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddDescription, setQuickAddDescription] = useState("");
+  const [quickAddPrice, setQuickAddPrice] = useState("");
+  const [quickAddLoading, setQuickAddLoading] = useState(false);
+  const [quickAddError, setQuickAddError] = useState("");
+  const [quickAddSuccess, setQuickAddSuccess] = useState("");
+
+  // Camera capture state
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mobileCameraInputRef = useRef<HTMLInputElement | null>(null);
+
   // Load catalogue
   useEffect(() => {
     async function fetchCatalogue() {
@@ -98,6 +114,106 @@ export default function Home() {
 
     fetchCatalogue();
   }, []);
+
+  // Attach the active camera stream to the video preview.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !cameraStream) return;
+
+    video.srcObject = cameraStream;
+    void video.play().catch(() => {
+      setCameraError("The camera preview could not start. Please try again.");
+    });
+
+    return () => {
+      video.srcObject = null;
+    };
+  }, [cameraStream, cameraOpen]);
+
+  // Stop camera tracks when the camera is closed or the page is unmounted.
+  useEffect(() => {
+    return () => {
+      cameraStream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraStream]);
+
+  async function startCamera() {
+    setCameraError("");
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError(
+        "Live camera access is unavailable in this browser or context. Use Take Photo or Upload Image instead."
+      );
+      return;
+    }
+
+    try {
+      // Stop any previous stream before opening a new one.
+      cameraStream?.getTracks().forEach((track) => track.stop());
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
+
+      setCameraStream(stream);
+      setCameraOpen(true);
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        setCameraError("Camera permission was denied. Allow camera access in your browser settings, or use Take Photo / Upload Image.");
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        setCameraError("No camera was found on this device. Use Take Photo or Upload Image instead.");
+      } else if (name === "NotReadableError" || name === "TrackStartError") {
+        setCameraError("The camera may already be in use by another application. Close it and try again.");
+      } else {
+        setCameraError(err instanceof Error ? err.message : "Unable to access the camera.");
+      }
+    }
+  }
+
+  function stopCamera() {
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    setCameraStream(null);
+    setCameraOpen(false);
+  }
+
+  function captureCameraFrame() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCameraError("The camera is not ready yet. Wait for the preview, then try again.");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setCameraError("Unable to capture the camera frame. Please try again.");
+      return;
+    }
+
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setCameraError("The captured image could not be processed. Please try again.");
+        return;
+      }
+
+      const capturedFile = new File([blob], `snap-to-pay-${Date.now()}.jpg`, {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      });
+      handleImageSelection(capturedFile);
+      stopCamera();
+    }, "image/jpeg", 0.92);
+  }
 
   // Generate and clean up image preview URL
   useEffect(() => {
@@ -143,6 +259,93 @@ export default function Home() {
     setAiAnalysisComplete(false);
     setUnknownItems([]);
     setSelectedImage(file);
+  }
+
+  // Create a persistent catalogue product and add it to the current cart.
+  async function handleQuickAdd(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (quickAddLoading) return;
+
+    try {
+      setQuickAddLoading(true);
+      setQuickAddError("");
+      setQuickAddSuccess("");
+
+      const name = quickAddName.trim();
+      const description = quickAddDescription.trim();
+      const priceInRupees = Number(quickAddPrice);
+
+      if (!name) {
+        throw new Error("Please enter a product name.");
+      }
+
+      if (!Number.isFinite(priceInRupees) || priceInRupees <= 0) {
+        throw new Error("Please enter a valid product price.");
+      }
+
+      // Convert INR to integer paise before sending it to the API.
+      const priceInPaise = Math.round(priceInRupees * 100);
+
+      if (!Number.isSafeInteger(priceInPaise) || priceInPaise <= 0) {
+        throw new Error("The product price is outside the supported range.");
+      }
+
+      const response = await fetch("/api/catalog", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name,
+          description: description || null,
+          price: priceInPaise,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success || !data.item) {
+        throw new Error(data.message || "Unable to add product.");
+      }
+
+      const newProduct: CatalogItem = data.item;
+
+      // Keep the database-backed catalogue and current cart in sync.
+      setProducts((previous) => [...previous, newProduct]);
+
+      const matchingUnknownItem = unknownItems.find(
+        (item) => item.description.trim().toLowerCase() === name.toLowerCase()
+      );
+      const quantityToAdd = Math.max(
+        1,
+        Math.min(100, matchingUnknownItem?.estimatedQuantity || 1)
+      );
+
+      setQuantities((previous) => ({
+        ...previous,
+        [newProduct.id]: quantityToAdd,
+      }));
+
+      // A changed cart must start a fresh sale and PayPal checkout.
+      setCreatedSale(null);
+      setPaypalOrder(null);
+      setPaypalError("");
+
+      setQuickAddSuccess(
+        `${newProduct.name} added to your catalogue and cart.`
+      );
+      setQuickAddName("");
+      setQuickAddDescription("");
+      setQuickAddPrice("");
+      setQuickAddOpen(false);
+    } catch (err) {
+      setQuickAddError(
+        err instanceof Error ? err.message : "Unable to add custom product."
+      );
+    } finally {
+      setQuickAddLoading(false);
+    }
   }
 
   async function handleAnalyzeImage() {
@@ -376,10 +579,75 @@ export default function Home() {
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
                 className="hidden"
-                onChange={(event) =>
-                  handleImageSelection(event.target.files?.[0])
-                }
+                onChange={(event) => {
+                  handleImageSelection(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
               />
+
+              {/* Mobile-native camera capture. Devices may offer a camera or file picker. */}
+              <input
+                ref={mobileCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(event) => {
+                  handleImageSelection(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+              />
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => mobileCameraInputRef.current?.click()}
+                  className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 transition hover:bg-zinc-100"
+                >
+                  Take Photo
+                </button>
+                <button
+                  type="button"
+                  onClick={cameraOpen ? stopCamera : startCamera}
+                  className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-700"
+                >
+                  {cameraOpen ? "Close Camera" : "Use Camera"}
+                </button>
+              </div>
+
+              {cameraOpen && (
+                <div className="mt-3 overflow-hidden rounded-xl border border-zinc-300 bg-black">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="max-h-96 w-full object-contain"
+                  />
+                  <div className="flex gap-2 bg-zinc-900 p-3">
+                    <button
+                      type="button"
+                      onClick={captureCameraFrame}
+                      className="flex-1 rounded-lg bg-white px-4 py-2.5 text-sm font-bold text-zinc-900 hover:bg-zinc-200"
+                    >
+                      Snap Photo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="rounded-lg border border-zinc-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {cameraError && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  {cameraError}
+                </div>
+              )}
 
               {selectedImage && (
                 <div className="mt-3 flex items-center justify-between gap-3">
@@ -433,6 +701,22 @@ export default function Home() {
                 </p>
               )}
 
+              {analyzing && (
+                <div className="mt-4 overflow-hidden rounded-xl border border-zinc-300 bg-zinc-950 p-4 text-white">
+                  <div className="flex items-center gap-3">
+                    <span className="relative flex h-3 w-3">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-75" />
+                      <span className="relative inline-flex h-3 w-3 rounded-full bg-cyan-400" />
+                    </span>
+                    <span className="text-sm font-semibold tracking-wide">SCANNING PRODUCTS</span>
+                  </div>
+                  <div className="mt-3 h-1 overflow-hidden rounded-full bg-zinc-700">
+                    <div className="h-full w-2/5 animate-pulse rounded-full bg-cyan-400" />
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-300">Matching visual features against your seller catalogue...</p>
+                </div>
+              )}
+
               {analysisError && (
                 <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                   {analysisError}
@@ -481,10 +765,15 @@ export default function Home() {
                         </p>
 
                         {confidenceScores[product.id] !== undefined && (
-                          <p className="mt-1 text-xs text-green-700">
-                            AI confidence:{" "}
+                          <span
+                            className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${confidenceScores[product.id] >= 0.9
+                              ? "bg-green-100 text-green-800"
+                              : "bg-amber-100 text-amber-800"
+                              }`}
+                          >
+                            {confidenceScores[product.id] >= 0.9 ? "High" : "Review"} confidence ·{" "}
                             {(confidenceScores[product.id] * 100).toFixed(0)}%
-                          </p>
+                          </span>
                         )}
                       </div>
 
@@ -534,7 +823,7 @@ export default function Home() {
 
                   <p className="mt-1 text-sm text-amber-800">
                     These items could not be matched to your catalogue.
-                    Add the correct products manually if needed.
+                    You can create a catalogue entry for an unrecognized product using Quick Add.
                   </p>
 
                   <ul className="mt-3 space-y-2">
@@ -548,6 +837,17 @@ export default function Home() {
                       </li>
                     ))}
                   </ul>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickAddOpen(true);
+                      setQuickAddError("");
+                      setQuickAddName(unknownItems[0]?.description || "");
+                    }}
+                    className="mt-4 rounded-lg bg-amber-900 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800"
+                  >
+                    Quick Add Product
+                  </button>
                 </div>
               )}
 
@@ -570,6 +870,71 @@ export default function Home() {
               <p className="mt-1 text-sm text-zinc-500">
                 Add or adjust products manually.
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickAddOpen((open) => !open);
+                  setQuickAddError("");
+                }}
+                className="mt-4 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-zinc-100"
+              >
+                {quickAddOpen ? "Close Quick Add" : "+ Quick Add Custom Product"}
+              </button>
+              {quickAddSuccess && (
+                <p className="mt-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                  {quickAddSuccess}
+                </p>
+              )}
+              {quickAddOpen && (
+                <form onSubmit={handleQuickAdd} className="mt-4 max-w-xl space-y-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+                  <h3 className="font-semibold">Add a custom product</h3>
+                  <label className="block text-sm font-medium">
+                    Product name
+                    <input
+                      required
+                      maxLength={255}
+                      value={quickAddName}
+                      onChange={(event) => setQuickAddName(event.target.value)}
+                      placeholder="e.g. Used AirPods Pro"
+                      className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Description (optional)
+                    <textarea
+                      maxLength={2000}
+                      value={quickAddDescription}
+                      onChange={(event) => setQuickAddDescription(event.target.value)}
+                      placeholder="Product condition, model, or other details"
+                      rows={2}
+                      className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Price (INR)
+                    <input
+                      required
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={quickAddPrice}
+                      onChange={(event) => setQuickAddPrice(event.target.value)}
+                      placeholder="e.g. 2500.00"
+                      className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+                  {quickAddError && (
+                    <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{quickAddError}</p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={quickAddLoading}
+                    className="rounded-lg bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50"
+                  >
+                    {quickAddLoading ? "Saving product..." : "Save Product & Add to Cart"}
+                  </button>
+                </form>
+              )}
             </div>
 
             {loading && (
