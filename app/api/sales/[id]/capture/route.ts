@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, sales } from "../../../../../src/lib/db";
+import { createSaleProofRecord } from "../../../../../src/lib/sale-proof";
 import { getPayPalAccessToken } from "../../../../../src/lib/paypal";
 import { z } from "zod";
 
@@ -118,15 +119,21 @@ export async function POST(
         }
 
         // 7. Update PostgreSQL only after verified capture
-        const [updatedSale] = await db
-            .update(sales)
-            .set({
-                paymentStatus: "completed",
-                paypalCaptureId: capture.id,
-                updatedAt: new Date(),
-            })
-            .where(eq(sales.id, sale.id))
-            .returning();
+        const updatedSale = await db.transaction(async (tx) => {
+            const [row] = await tx
+                .update(sales)
+                .set({
+                    paymentStatus: "completed",
+                    paypalCaptureId: capture.id,
+                    updatedAt: new Date(),
+                })
+                .where(eq(sales.id, sale.id))
+                .returning();
+
+            await createSaleProofRecord(row.id, tx);
+
+            return row;
+        });
 
         console.info("PayPal payment captured:", {
             saleId: sale.id,

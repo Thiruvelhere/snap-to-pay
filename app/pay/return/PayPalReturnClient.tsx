@@ -304,12 +304,21 @@ export default function PayPalReturnClient({
                                 </div>
                             </section>
 
-                            <a
-                                href="/"
-                                className="block w-full rounded-lg bg-black px-5 py-4 text-center font-semibold text-white hover:bg-gray-800"
-                            >
-                                Back to Snap to Pay
-                            </a>
+                            <div className="space-y-3">
+                                <a
+                                    href={`/verify/${encodeURIComponent(receipt.id)}`}
+                                    className="block w-full rounded-lg bg-violet-600 px-5 py-4 text-center font-semibold text-white hover:bg-violet-500"
+                                >
+                                    Verify transaction proof
+                                </a>
+
+                                <a
+                                    href="/"
+                                    className="block w-full rounded-lg bg-black px-5 py-4 text-center font-semibold text-white hover:bg-gray-800"
+                                >
+                                    Back to Snap to Pay
+                                </a>
+                            </div>
 
                             <p className="text-center text-xs text-gray-400">
                                 Payments powered by PayPal

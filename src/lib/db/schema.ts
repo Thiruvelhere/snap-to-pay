@@ -8,6 +8,7 @@ import {
   real,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -146,13 +147,41 @@ export const saleLines = pgTable(
   ]
 );
 
+export const saleProofs = pgTable(
+  "sale_proofs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    saleId: uuid("sale_id")
+      .notNull()
+      .unique()
+      .references(() => sales.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    previousHash: varchar("previous_hash", { length: 255 }),
+    proofHash: varchar("proof_hash", { length: 255 }).notNull(),
+    ledgerHash: varchar("ledger_hash", { length: 255 }).notNull(),
+    canonicalPayload: text("canonical_payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("sale_proofs_sale_id_idx").on(table.saleId),
+    index("sale_proofs_sequence_idx").on(table.sequence),
+    check("sale_proofs_sequence_positive", sql`${table.sequence} > 0`),
+  ]
+);
+
 // Relations
 export const catalogItemsRelations = relations(catalogItems, ({ many }) => ({
   saleLines: many(saleLines),
 }));
 
-export const salesRelations = relations(sales, ({ many }) => ({
+export const salesRelations = relations(sales, ({ many, one }) => ({
   lines: many(saleLines),
+  proof: one(saleProofs, {
+    fields: [sales.id],
+    references: [saleProofs.saleId],
+  }),
 }));
 
 export const saleLinesRelations = relations(saleLines, ({ one }) => ({
@@ -166,6 +195,13 @@ export const saleLinesRelations = relations(saleLines, ({ one }) => ({
   }),
 }));
 
+export const saleProofsRelations = relations(saleProofs, ({ one }) => ({
+  sale: one(sales, {
+    fields: [saleProofs.saleId],
+    references: [sales.id],
+  }),
+}));
+
 // Inferred TypeScript Types
 export type CatalogItem = typeof catalogItems.$inferSelect;
 export type NewCatalogItem = typeof catalogItems.$inferInsert;
@@ -175,6 +211,9 @@ export type NewSale = typeof sales.$inferInsert;
 
 export type SaleLine = typeof saleLines.$inferSelect;
 export type NewSaleLine = typeof saleLines.$inferInsert;
+
+export type SaleProof = typeof saleProofs.$inferSelect;
+export type NewSaleProof = typeof saleProofs.$inferInsert;
 export type PaymentStatus = (typeof paymentStatusEnum.enumValues)[number];
 export type SaleLineSource = (typeof saleLineSourceEnum.enumValues)[number];
 
