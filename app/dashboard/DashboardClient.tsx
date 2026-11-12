@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import "./dashboard-motion.css";
 
 type CatalogItem = {
   id: string;
@@ -79,6 +80,8 @@ export default function Home() {
   const [savingUnknownIndex, setSavingUnknownIndex] = useState<number | null>(null);
   const [unknownProductError, setUnknownProductError] = useState("");
   const [aiAnalysisComplete, setAiAnalysisComplete] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [paypalModalOpen, setPaypalModalOpen] = useState(false);
 
   // Seller-created products
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -121,6 +124,26 @@ export default function Home() {
     }
 
     fetchCatalogue();
+  }, []);
+
+  // Reveal each stage as it enters the viewport; respects reduced-motion preferences.
+  useEffect(() => {
+    const targets = document.querySelectorAll<HTMLElement>("[data-scroll-reveal]");
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      targets.forEach((target) => target.classList.add("snap-visible"));
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("snap-visible");
+          observer.unobserve(entry.target);
+        }
+      }),
+      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+    );
+    targets.forEach((target) => observer.observe(target));
+    return () => observer.disconnect();
   }, []);
 
   // Attach the active camera stream to the video preview.
@@ -528,11 +551,13 @@ export default function Home() {
         throw new Error(data.message || "Unable to create sale");
       }
 
-      setCreatedSale({
+      const sale = {
         saleId: data.sale.saleId,
         total: data.sale.total,
         paymentStatus: data.sale.paymentStatus,
-      });
+      };
+      setCreatedSale(sale);
+      await handleCreatePayPalOrder(sale.saleId);
     } catch (err) {
       alert(
         err instanceof Error
@@ -544,14 +569,15 @@ export default function Home() {
     }
   }
 
-  async function handleCreatePayPalOrder() {
-    if (!createdSale || paypalLoading) return;
+  async function handleCreatePayPalOrder(saleId?: string) {
+    const targetSaleId = saleId || createdSale?.saleId;
+    if (!targetSaleId || paypalLoading) return;
 
     try {
       setPaypalLoading(true);
       setPaypalError("");
 
-      const response = await fetch(`/api/sales/${createdSale.saleId}/paypal`, {
+      const response = await fetch(`/api/sales/${targetSaleId}/paypal`, {
         method: "POST",
       });
 
@@ -580,6 +606,7 @@ export default function Home() {
         originalAmount: data.originalAmount,
         paypalAmount: data.paypalAmount,
       });
+      setPaypalModalOpen(true);
     } catch (err) {
       setPaypalError(
         err instanceof Error
@@ -592,7 +619,7 @@ export default function Home() {
   }
 
   return (
-    <main className="relative isolate min-h-screen overflow-hidden bg-[#100B16] text-white">
+    <main className="relative isolate min-h-screen overflow-x-clip bg-[#100B16] text-white snap-dashboard">
       <div className="pointer-events-none absolute -left-40 -top-40 h-[460px] w-[460px] rounded-full bg-pink-500/10 blur-[140px]" />
       <div className="pointer-events-none absolute -right-40 top-[35%] h-[520px] w-[520px] rounded-full bg-violet-600/10 blur-[150px]" />
       <div className="pointer-events-none absolute -bottom-56 left-[30%] h-[420px] w-[420px] rounded-full bg-fuchsia-500/[0.06] blur-[140px]" />
@@ -612,27 +639,26 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="relative z-10 mx-auto max-w-7xl space-y-8 px-6 py-10">
+      <div className="relative z-10 mx-auto max-w-7xl space-y-16 px-5 py-8 md:px-8 md:py-12">
 
         {/* AI IMAGE ANALYSIS */}
-        <section className="rounded-2xl border border-white/10 bg-[#1A1222]/90 p-6 shadow-sm">
+        <section data-scroll-reveal className="snap-stage snap-camera rounded-[2rem] border border-white/10 bg-[#1A1222]/90 p-6 shadow-[0_30px_100px_rgba(0,0,0,0.28)] md:p-10">
           <div className="mb-5">
-            <h2 className="text-xl font-semibold">
-              AI-powered product detection
+            <h2 className="text-3xl font-semibold tracking-tight md:text-5xl">
+              Start with a <span className="bg-gradient-to-r from-pink-300 to-violet-300 bg-clip-text text-transparent">snap.</span>
             </h2>
             <p className="mt-1 text-sm text-white/50">
-              Upload a photo of your products and let AI build
-              your cart automatically.
+              Capture your products. Let AI recognise them and prepare the cart automatically.
             </p>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
 
             {/* Image upload */}
             <div>
               <label
                 htmlFor="product-image"
-                className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/15 bg-white/[0.04] p-5 text-center transition hover:border-zinc-500"
+                className="flex min-h-[340px] cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-white/15 bg-white/[0.04] p-5 text-center transition hover:border-zinc-500"
               >
                 {imagePreview ? (
                   <img
@@ -999,16 +1025,21 @@ export default function Home() {
           )}
         </section>
 
-        {/* CATALOGUE AND CART */}
-        <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
+        <button type="button" onClick={() => document.getElementById("product-catalogue")?.scrollIntoView({ behavior: "smooth" })} className="mx-auto flex flex-col items-center gap-2 rounded-full px-5 py-3 text-sm text-white/55 transition hover:text-pink-200" aria-label="Scroll to product catalogue">
+          <span>Scroll to explore your catalogue</span>
+          <span className="snap-scroll-arrow text-xl">↓</span>
+        </button>
 
-          <section>
+        {/* CATALOGUE — revealed as the seller moves beyond the camera stage */}
+        <div className="space-y-8">
+
+          <section id="product-catalogue" data-scroll-reveal className="snap-stage snap-catalogue scroll-mt-8 rounded-[2rem] border border-white/10 bg-[#17101f]/75 p-6 md:p-10">
             <div className="mb-6">
-              <h2 className="text-2xl font-semibold">
-                Product Catalogue
+              <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+                Explore the catalogue
               </h2>
               <p className="mt-1 text-sm text-white/50">
-                Add or adjust products manually.
+                Your detected products and the full catalogue, ready to add to this sale.
               </p>
               <button
                 type="button"
@@ -1166,246 +1197,272 @@ export default function Home() {
             )}
           </section>
 
-          {/* CART */}
-          <aside className="h-fit rounded-xl border border-white/10 bg-[#1A1222]/90 p-6 shadow-sm lg:sticky lg:top-8">
-            <h2 className="text-xl font-semibold">
-              Current Cart
-            </h2>
+        </div>
 
-            <p className="mt-1 text-sm text-white/50">
-              {totalItems} {totalItems === 1 ? "item" : "items"} selected
-            </p>
-
-            <div className="my-5 border-t border-white/10" />
-
-            {cartItems.length === 0 ? (
-              <p className="py-8 text-center text-sm text-white/35">
-                Your cart is empty. Add products to get started.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {cartItems.map((product) => (
-                  <div
-                    key={product.id}
-                    className="flex justify-between gap-3 text-sm"
-                  >
-                    <div>
-                      <p className="font-medium">
-                        {product.name}
-                      </p>
-                      <p className="mt-1 text-white/50">
-                        {quantities[product.id]} ×{" "}
-                        {formatPrice(product.price)}
-                      </p>
-                    </div>
-
-                    <span className="font-semibold">
-                      {formatPrice(
-                        product.price * quantities[product.id]
-                      )}
-                    </span>
-                  </div>
-                ))}
+        {/* CART DRAWER — opened from the persistent corner button */}
+        {cartOpen && (
+          <div className="fixed inset-0 z-[90] flex justify-end bg-black/65 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) setCartOpen(false); }}>
+            <aside role="dialog" aria-modal="true" aria-label="Shopping cart" className="snap-cart-drawer h-full w-full max-w-md overflow-y-auto border-l border-white/10 bg-[#160f1e] p-6 shadow-2xl">
+              <div className="mb-5 flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-pink-200/70">Your order</span>
+                <button type="button" onClick={() => setCartOpen(false)} className="rounded-full border border-white/15 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10" aria-label="Close cart">Close ×</button>
               </div>
-            )}
+              <h2 className="text-xl font-semibold">
+                Current Cart
+              </h2>
 
-            <div className="my-5 border-t border-white/10" />
+              <p className="mt-1 text-sm text-white/50">
+                {totalItems} {totalItems === 1 ? "item" : "items"} selected
+              </p>
 
-            <div className="flex justify-between text-lg font-bold">
-              <span>Subtotal</span>
-              <span>{formatPrice(subtotal)}</span>
-            </div>
+              <div className="my-5 border-t border-white/10" />
 
-            <button
-              onClick={handleCheckout}
-              disabled={cartItems.length === 0 || checkoutLoading}
-              className="mt-6 w-full rounded-lg bg-gradient-to-r from-pink-400 to-violet-500 px-5 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-zinc-300"
-            >
-              {checkoutLoading ? "Creating Sale..." : "Continue to Checkout"}
-            </button>
-
-            {createdSale && (
-              <div className="mt-5 space-y-4">
-                {/* Sale Confirmation Header */}
-                <div className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 p-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-emerald-200">
-                      Sale created
-                    </h3>
-                    <span className="rounded-full bg-emerald-400/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-200">
-                      ID: {createdSale.saleId.slice(0, 8)}...
-                    </span>
-                  </div>
-
-                  <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-2xl font-bold text-emerald-100">
-                      {formatPrice(createdSale.total)}
-                    </span>
-                    <span className="rounded-full bg-emerald-400/15 px-2.5 py-0.5 text-xs font-medium text-emerald-200">
-                      Status: {createdSale.paymentStatus}
-                    </span>
-                  </div>
-                </div>
-
-                {/* 1. Pay with PayPal Button (shown immediately below sale confirmation) */}
-                {!paypalOrder && (
-                  <div className="space-y-3">
-                    <button
-                      onClick={handleCreatePayPalOrder}
-                      disabled={paypalLoading}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0070BA] px-5 py-3.5 font-semibold text-white shadow-sm transition hover:bg-[#005ea6] disabled:cursor-not-allowed disabled:opacity-60"
+              {cartItems.length === 0 ? (
+                <p className="py-8 text-center text-sm text-white/35">
+                  Your cart is empty. Add products to get started.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {cartItems.map((product) => (
+                    <div
+                      key={product.id}
+                      className="flex justify-between gap-3 text-sm"
                     >
-                      {paypalLoading ? (
-                        <>
-                          <svg
-                            className="h-5 w-5 animate-spin text-white"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                          >
-                            <circle
-                              className="opacity-25"
-                              cx="12"
-                              cy="12"
-                              r="10"
-                              stroke="currentColor"
-                              strokeWidth="4"
-                            />
-                            <path
-                              className="opacity-75"
-                              fill="currentColor"
-                              d="M4 12a8 8 0 018-8v8H4z"
-                            />
-                          </svg>
-                          <span>Creating PayPal Order...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-lg">💳</span>
-                          <span>Pay with PayPal</span>
-                        </>
-                      )}
-                    </button>
-
-                    {paypalError && (
-                      <div className="rounded-lg border border-red-300/20 bg-red-400/10 p-3 text-xs text-red-200">
-                        <p className="font-semibold">PayPal Error:</p>
-                        <p>{paypalError}</p>
-                        <button
-                          onClick={handleCreatePayPalOrder}
-                          className="mt-1 font-semibold underline hover:text-red-900"
-                        >
-                          Retry
-                        </button>
+                      <div>
+                        <p className="font-medium">
+                          {product.name}
+                        </p>
+                        <p className="mt-1 text-white/50">
+                          {quantities[product.id]} ×{" "}
+                          {formatPrice(product.price)}
+                        </p>
                       </div>
-                    )}
-                  </div>
-                )}
 
-                {/* 2. Scan to Pay & QR Checkout Display (once PayPal order created) */}
-                {paypalOrder && (
-                  <div className="rounded-2xl border border-pink-300/30 bg-[#1A1222] p-5 text-white shadow-lg">
-                    {/* Header with Scan to Pay & Pending status */}
+                      <span className="font-semibold">
+                        {formatPrice(
+                          product.price * quantities[product.id]
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="my-5 border-t border-white/10" />
+
+              <div className="flex justify-between text-lg font-bold">
+                <span>Subtotal</span>
+                <span>{formatPrice(subtotal)}</span>
+              </div>
+
+              <button
+                onClick={handleCheckout}
+                disabled={cartItems.length === 0 || checkoutLoading || paypalLoading}
+                className="mt-6 w-full rounded-lg bg-gradient-to-r from-pink-400 to-violet-500 px-5 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-zinc-300"
+              >
+                {checkoutLoading || paypalLoading ? "Preparing payment..." : "Pay"}
+              </button>
+
+              {createdSale && (
+                <div className="mt-5 space-y-4">
+                  {/* Sale Confirmation Header */}
+                  <div className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 p-4">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="relative flex h-3 w-3">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-                          <span className="relative inline-flex h-3 w-3 rounded-full bg-amber-400/100" />
-                        </span>
-                        <h3 className="font-bold text-white">
-                          Scan to Pay
-                        </h3>
-                      </div>
-
-                      <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-xs font-semibold text-amber-200">
-                        Payment pending
+                      <h3 className="font-semibold text-emerald-200">
+                        Sale created
+                      </h3>
+                      <span className="rounded-full bg-emerald-400/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-200">
+                        ID: {createdSale.saleId.slice(0, 8)}...
                       </span>
                     </div>
 
-                    <p className="mt-1 text-xs text-white/50">
-                      PayPal Sandbox approval QR
-                    </p>
-
-                    {/* Dual currency amount display (INR + USD) */}
-                    <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] p-3">
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
-                          Sale Amount
-                        </p>
-                        <p className="text-lg font-bold text-white">
-                          {formatPrice(paypalOrder.originalAmount.value)}
-                        </p>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
-                          PayPal Charged
-                        </p>
-                        <p className="text-lg font-bold text-[#0070BA]">
-                          ${paypalOrder.paypalAmount.value} USD
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Real PayPal Approval URL QR Code */}
-                    <div className="my-5 flex flex-col items-center justify-center">
-                      <div className="rounded-2xl border-4 border-white bg-white p-2 shadow-inner">
-                        <img
-                          src={paypalOrder.qrCodeDataUrl}
-                          alt="PayPal Checkout QR Code"
-                          className="h-52 w-52 rounded-lg object-contain"
-                        />
-                      </div>
-                      <p className="mt-3 text-center text-xs text-white/50">
-                        Buyer can scan this QR code using their camera on another device
-                      </p>
-                    </div>
-
-                    {/* Alternative Clickable Approval Link */}
-                    <div className="space-y-2 border-t border-white/10 pt-4">
-                      <p className="text-center text-xs font-medium text-white/65">
-                        Or open the PayPal checkout link
-                      </p>
-
-                      <a
-                        href={paypalOrder.approvalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-pink-400 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110"
-                      >
-                        <span>Open PayPal Checkout ↗</span>
-                      </a>
-
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(paypalOrder.approvalUrl);
-                          setCopiedLink(true);
-                          setTimeout(() => setCopiedLink(false), 2500);
-                        }}
-                        className="w-full text-center text-xs text-white/50 underline hover:text-white/90"
-                      >
-                        {copiedLink
-                          ? "✓ Link copied to clipboard!"
-                          : "Copy checkout link"}
-                      </button>
-                    </div>
-
-                    {/* Order ID tracking */}
-                    <div className="mt-4 border-t border-white/10 pt-3 text-center">
-                      <p className="font-mono text-[10px] text-white/35">
-                        PayPal Order ID: {paypalOrder.paypalOrderId}
-                      </p>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-2xl font-bold text-emerald-100">
+                        {formatPrice(createdSale.total)}
+                      </span>
+                      <span className="rounded-full bg-emerald-400/15 px-2.5 py-0.5 text-xs font-medium text-emerald-200">
+                        Status: {createdSale.paymentStatus}
+                      </span>
                     </div>
                   </div>
-                )}
-              </div>
-            )}
 
-            <p className="mt-3 text-center text-xs text-white/35">
-              Payments powered by PayPal
-            </p>
-          </aside>
-        </div>
+                  {/* 1. Pay with PayPal Button (shown immediately below sale confirmation) */}
+                  {!paypalOrder && (
+                    <div className="space-y-3">
+                      <button
+                        onClick={() => handleCreatePayPalOrder()}
+                        disabled={paypalLoading}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0070BA] px-5 py-3.5 font-semibold text-white shadow-sm transition hover:bg-[#005ea6] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {paypalLoading ? (
+                          <>
+                            <svg
+                              className="h-5 w-5 animate-spin text-white"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8v8H4z"
+                              />
+                            </svg>
+                            <span>Creating PayPal Order...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-lg">💳</span>
+                            <span>Pay with PayPal</span>
+                          </>
+                        )}
+                      </button>
+
+                      {paypalError && (
+                        <div className="rounded-lg border border-red-300/20 bg-red-400/10 p-3 text-xs text-red-200">
+                          <p className="font-semibold">PayPal Error:</p>
+                          <p>{paypalError}</p>
+                          <button
+                            onClick={() => handleCreatePayPalOrder()}
+                            className="mt-1 font-semibold underline hover:text-red-900"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 2. Scan to Pay & QR Checkout Display (once PayPal order created) */}
+                  {paypalOrder && !paypalModalOpen && (
+                    <button type="button" onClick={() => setPaypalModalOpen(true)} className="w-full rounded-xl border border-pink-300/30 bg-pink-400/10 px-4 py-3 text-sm font-semibold text-pink-100 transition hover:bg-pink-400/15">Reopen payment QR</button>
+                  )}
+                  {paypalOrder && paypalModalOpen && (
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="PayPal QR payment">
+                      <div className="max-h-[90svh] w-full max-w-md overflow-y-auto rounded-3xl border border-pink-300/30 bg-[#1A1222] p-5 text-white shadow-2xl">
+                        <div className="mb-4 flex items-center justify-between">
+                          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-pink-200/70">Secure checkout</span>
+                          <button type="button" onClick={() => setPaypalModalOpen(false)} className="rounded-full border border-white/15 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10">Close ×</button>
+                        </div>
+                        {/* Header with Scan to Pay & Pending status */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="relative flex h-3 w-3">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+                              <span className="relative inline-flex h-3 w-3 rounded-full bg-amber-400/100" />
+                            </span>
+                            <h3 className="font-bold text-white">
+                              Scan to Pay
+                            </h3>
+                          </div>
+
+                          <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-xs font-semibold text-amber-200">
+                            Payment pending
+                          </span>
+                        </div>
+
+                        <p className="mt-1 text-xs text-white/50">
+                          PayPal Sandbox approval QR
+                        </p>
+
+                        {/* Dual currency amount display (INR + USD) */}
+                        <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                          <div>
+                            <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                              Sale Amount
+                            </p>
+                            <p className="text-lg font-bold text-white">
+                              {formatPrice(paypalOrder.originalAmount.value)}
+                            </p>
+                          </div>
+
+                          <div className="text-right">
+                            <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                              PayPal Charged
+                            </p>
+                            <p className="text-lg font-bold text-[#0070BA]">
+                              ${paypalOrder.paypalAmount.value} USD
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Real PayPal Approval URL QR Code */}
+                        <div className="my-5 flex flex-col items-center justify-center">
+                          <div className="rounded-2xl border-4 border-white bg-white p-2 shadow-inner">
+                            <img
+                              src={paypalOrder.qrCodeDataUrl}
+                              alt="PayPal Checkout QR Code"
+                              className="h-52 w-52 rounded-lg object-contain"
+                            />
+                          </div>
+                          <p className="mt-3 text-center text-xs text-white/50">
+                            Buyer can scan this QR code using their camera on another device
+                          </p>
+                        </div>
+
+                        {/* Alternative Clickable Approval Link */}
+                        <div className="space-y-2 border-t border-white/10 pt-4">
+                          <p className="text-center text-xs font-medium text-white/65">
+                            Or open the PayPal checkout link
+                          </p>
+
+                          <a
+                            href={paypalOrder.approvalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-pink-400 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110"
+                          >
+                            <span>Open PayPal Checkout ↗</span>
+                          </a>
+
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(paypalOrder.approvalUrl);
+                              setCopiedLink(true);
+                              setTimeout(() => setCopiedLink(false), 2500);
+                            }}
+                            className="w-full text-center text-xs text-white/50 underline hover:text-white/90"
+                          >
+                            {copiedLink
+                              ? "✓ Link copied to clipboard!"
+                              : "Copy checkout link"}
+                          </button>
+                        </div>
+
+                        {/* Order ID tracking */}
+                        <div className="mt-4 border-t border-white/10 pt-3 text-center">
+                          <p className="font-mono text-[10px] text-white/35">
+                            PayPal Order ID: {paypalOrder.paypalOrderId}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <p className="mt-3 text-center text-xs text-white/35">
+                Payments powered by PayPal
+              </p>
+            </aside>
+          </div>
+        )}
       </div>
+
+      {/* Always-available cart shortcut */}
+      <button type="button" onClick={() => setCartOpen(true)} className="snap-cart-fab fixed bottom-5 right-5 z-[80] flex items-center gap-3 rounded-full border border-white/15 bg-gradient-to-r from-pink-400 to-violet-500 px-5 py-3.5 font-semibold text-white shadow-[0_12px_40px_rgba(190,90,220,0.35)] transition hover:-translate-y-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-pink-200 md:bottom-8 md:right-8" aria-label={`Open cart, ${totalItems} items`}>
+        <span className="text-lg" aria-hidden="true">▣</span>
+        <span>Cart</span>
+        <span className="min-w-7 rounded-full bg-[#100B16]/80 px-2 py-1 text-center text-xs tabular-nums">{totalItems}</span>
+        <span className="border-l border-white/25 pl-3 tabular-nums">{formatPrice(subtotal)}</span>
+      </button>
     </main>
   );
 }

@@ -1,0 +1,23 @@
+/* Snap to Pay dashboard motion system */
+.snap-dashboard { scroll-behavior: smooth; }
+.snap-stage {
+  opacity: 0;
+  transform: translate3d(0, 56px, 0) scale(.985);
+  filter: blur(7px);
+  transition: opacity 850ms cubic-bezier(.2,.75,.2,1), transform 850ms cubic-bezier(.2,.75,.2,1), filter 850ms ease;
+  will-change: opacity, transform;
+}
+.snap-stage.snap-visible { opacity: 1; transform: translate3d(0,0,0) scale(1); filter: blur(0); }
+.snap-camera { min-height: min(780px, calc(100svh - 118px)); display: flex; flex-direction: column; justify-content: center; }
+.snap-catalogue { transition-delay: 80ms; }
+.snap-scroll-arrow { display: inline-block; animation: snap-bob 1.6s ease-in-out infinite; }
+.snap-cart-fab { animation: snap-cart-in 650ms cubic-bezier(.2,.8,.2,1) both; }
+.snap-cart-drawer { animation: snap-drawer-in 420ms cubic-bezier(.2,.8,.2,1) both; }
+@keyframes snap-bob { 0%,100% { transform: translateY(0); opacity: .55; } 50% { transform: translateY(7px); opacity: 1; } }
+@keyframes snap-cart-in { from { opacity: 0; transform: translateY(18px) scale(.94); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes snap-drawer-in { from { transform: translateX(100%); opacity: .6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .snap-stage, .snap-stage.snap-visible { opacity: 1; transform: none; filter: none; transition: none; }
+  .snap-scroll-arrow, .snap-cart-fab, .snap-cart-drawer { animation: none; }
+  .snap-dashboard { scroll-behavior: auto; }
+}
