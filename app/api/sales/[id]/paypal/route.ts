@@ -1,10 +1,11 @@
 
 import { NextResponse } from "next/server";
-import { eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, sales } from "../../../../../src/lib/db";
 import { getPayPalAccessToken } from "../../../../../src/lib/paypal";
 
 const PAYPAL_BASE_URL = process.env.PAYPAL_BASE_URL;
+const APP_BASE_URL = process.env.APP_BASE_URL?.replace(/\/$/, "");
 const INR_TO_USD_RATE = Number(process.env.PAYPAL_INR_TO_USD_RATE);
 
 export async function POST(
@@ -21,7 +22,12 @@ export async function POST(
             );
         }
 
-        if (!PAYPAL_BASE_URL || !Number.isFinite(INR_TO_USD_RATE) || INR_TO_USD_RATE <= 0) {
+        if (
+            !PAYPAL_BASE_URL ||
+            !APP_BASE_URL ||
+            !Number.isFinite(INR_TO_USD_RATE) ||
+            INR_TO_USD_RATE <= 0
+        ) {
             throw new Error("PayPal configuration is invalid");
         }
 
@@ -109,8 +115,8 @@ export async function POST(
                                 brand_name: "Snap to Pay",
                                 user_action: "PAY_NOW",
                                 shipping_preference: "NO_SHIPPING",
-                                return_url: `http://localhost:3000/pay/return?saleId=${sale.id}`,
-                                cancel_url: `http://localhost:3000/pay/cancel?saleId=${sale.id}`,
+                                return_url: `${APP_BASE_URL}/pay/return?saleId=${sale.id}`,
+                                cancel_url: `${APP_BASE_URL}/pay/cancel?saleId=${sale.id}`,
                             },
                         },
                     },
